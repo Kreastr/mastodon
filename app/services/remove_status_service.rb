@@ -4,6 +4,12 @@ class RemoveStatusService < BaseService
   include Redisable
   include Payloadable
 
+  # Delete a status
+  # @param   [Status] status
+  # @param   [Hash] options
+  # @option  [Boolean] :redraft
+  # @option  [Boolean] :immediate
+  # @option [Boolean] :original_removed
   def call(status, **options)
     @payload  = Oj.dump(event: :delete, payload: status.id.to_s)
     @status   = status
@@ -24,8 +30,9 @@ class RemoveStatusService < BaseService
         remove_from_public
         remove_from_media if status.media_attachments.any?
         remove_from_spam_check
+        remove_media
 
-        @status.destroy!
+        @status.destroy! if @options[:immediate] || !@status.reported?
       else
         raise Mastodon::RaceConditionError
       end
@@ -133,14 +140,28 @@ class RemoveStatusService < BaseService
     return unless @status.public_visibility?
 
     redis.publish('timeline:public', @payload)
-    redis.publish('timeline:public:local', @payload) if @status.local?
+    if @status.local?
+      redis.publish('timeline:public:local', @payload)
+    else
+      redis.publish('timeline:public:remote', @payload)
+    end
   end
 
   def remove_from_media
     return unless @status.public_visibility?
 
     redis.publish('timeline:public:media', @payload)
-    redis.publish('timeline:public:local:media', @payload) if @status.local?
+    if @status.local?
+      redis.publish('timeline:public:local:media', @payload)
+    else
+      redis.publish('timeline:public:remote:media', @payload)
+    end
+  end
+
+  def remove_media
+    return if @options[:redraft] || (!@options[:immediate] && @status.reported?)
+
+    @status.media_attachments.destroy_all
   end
 
   def remove_from_spam_check

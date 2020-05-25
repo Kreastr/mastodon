@@ -22,11 +22,6 @@ describe ApplicationController, type: :controller do
   end
 
   shared_examples 'respond_with_error' do |code|
-    it "returns http #{code} for any" do
-      subject
-      expect(response).to have_http_status(code)
-    end
-
     it "returns http #{code} for http" do
       subject
       expect(response).to have_http_status(code)
@@ -110,6 +105,7 @@ describe ApplicationController, type: :controller do
       sign_in current_user
 
       allow(Setting).to receive(:[]).with('theme').and_return 'contrast'
+      allow(Setting).to receive(:[]).with('noindex').and_return false
 
       expect(controller.view_context.current_theme).to eq 'contrast'
     end

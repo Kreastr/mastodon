@@ -15,6 +15,7 @@ import settings from './settings';
 import push_notifications from './push_notifications';
 import status_lists from './status_lists';
 import mutes from './mutes';
+import blocks from './blocks';
 import reports from './reports';
 import contexts from './contexts';
 import compose from './compose';
@@ -33,8 +34,10 @@ import polls from './polls';
 import identity_proofs from './identity_proofs';
 import trends from './trends';
 import missed_updates from './missed_updates';
+import announcements from './announcements';
 
 const reducers = {
+  announcements,
   dropdown_menu,
   timelines,
   meta,
@@ -51,6 +54,7 @@ const reducers = {
   settings,
   push_notifications,
   mutes,
+  blocks,
   reports,
   contexts,
   compose,

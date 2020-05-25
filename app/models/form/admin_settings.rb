@@ -16,6 +16,7 @@ class Form::AdminSettings
     open_deletion
     timeline_preview
     show_staff_badge
+    enable_bootstrap_timeline_accounts
     bootstrap_timeline_accounts
     theme
     min_invite_role
@@ -30,14 +31,17 @@ class Form::AdminSettings
     mascot
     spam_check_enabled
     trends
+    trendable_by_default
     show_domain_blocks
     show_domain_blocks_rationale
+    noindex
   ).freeze
 
   BOOLEAN_KEYS = %i(
     open_deletion
     timeline_preview
     show_staff_badge
+    enable_bootstrap_timeline_accounts
     activity_api_enabled
     peers_api_enabled
     show_known_fediverse_at_about_page
@@ -45,6 +49,8 @@ class Form::AdminSettings
     profile_directory
     spam_check_enabled
     trends
+    trendable_by_default
+    noindex
   ).freeze
 
   UPLOAD_KEYS = %i(

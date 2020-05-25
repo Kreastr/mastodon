@@ -6,8 +6,6 @@ class Api::V1::Accounts::StatusesController < Api::BaseController
 
   after_action :insert_pagination_headers, unless: -> { truthy_param?(:pinned) }
 
-  respond_to :json
-
   def index
     @statuses = load_statuses
     render json: @statuses, each_serializer: REST::StatusSerializer, relationships: StatusRelationshipsPresenter.new(@statuses, current_user&.account_id)
@@ -29,14 +27,13 @@ class Api::V1::Accounts::StatusesController < Api::BaseController
 
   def account_statuses
     statuses = truthy_param?(:pinned) ? pinned_scope : permitted_account_statuses
-    statuses = statuses.paginate_by_id(limit_param(DEFAULT_STATUSES_LIMIT), params_slice(:max_id, :since_id, :min_id))
 
     statuses.merge!(only_media_scope) if truthy_param?(:only_media)
     statuses.merge!(no_replies_scope) if truthy_param?(:exclude_replies)
     statuses.merge!(no_reblogs_scope) if truthy_param?(:exclude_reblogs)
     statuses.merge!(hashtag_scope)    if params[:tagged].present?
 
-    statuses
+    statuses.paginate_by_id(limit_param(DEFAULT_STATUSES_LIMIT), params_slice(:max_id, :since_id, :min_id))
   end
 
   def permitted_account_statuses
@@ -58,6 +55,8 @@ class Api::V1::Accounts::StatusesController < Api::BaseController
   end
 
   def pinned_scope
+    return Status.none if @account.blocking?(current_account)
+
     @account.pinned_statuses
   end
 

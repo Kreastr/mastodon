@@ -22,20 +22,27 @@
 #  application_id         :bigint(8)
 #  in_reply_to_account_id :bigint(8)
 #  poll_id                :bigint(8)
+#  deleted_at             :datetime
 #
 
 class Status < ApplicationRecord
   before_destroy :unlink_from_conversations
 
+  include Discard::Model
   include Paginable
   include Cacheable
   include StatusThreadingConcern
+  include RateLimitable
+
+  rate_limit by: :account, family: :statuses
+
+  self.discard_column = :deleted_at
 
   # If `override_timestamps` is set at creation time, Snowflake ID creation
   # will be based on current time instead of `created_at`
   attr_accessor :override_timestamps
 
-  update_index('statuses#status', :proper) if Chewy.enabled?
+  update_index('statuses#status', :proper)
 
   enum visibility: [:public, :unlisted, :private, :direct, :limited], _suffix: :visibility
 
@@ -50,6 +57,7 @@ class Status < ApplicationRecord
   belongs_to :reblog, foreign_key: 'reblog_of_id', class_name: 'Status', inverse_of: :reblogs, optional: true
 
   has_many :favourites, inverse_of: :status, dependent: :destroy
+  has_many :bookmarks, inverse_of: :status, dependent: :destroy
   has_many :reblogs, foreign_key: 'reblog_of_id', class_name: 'Status', inverse_of: :reblog, dependent: :destroy
   has_many :replies, foreign_key: 'in_reply_to_id', class_name: 'Status', inverse_of: :thread
   has_many :mentions, dependent: :destroy, inverse_of: :status
@@ -72,12 +80,13 @@ class Status < ApplicationRecord
 
   accepts_nested_attributes_for :poll
 
-  default_scope { recent }
+  default_scope { recent.kept }
 
   scope :recent, -> { reorder(id: :desc) }
   scope :remote, -> { where(local: false).where.not(uri: nil) }
   scope :local,  -> { where(local: true).or(where(uri: nil)) }
 
+  scope :with_accounts, ->(ids) { where(id: ids).includes(:account) }
   scope :without_replies, -> { where('statuses.reply = FALSE OR statuses.in_reply_to_account_id = statuses.account_id') }
   scope :without_reblogs, -> { where('statuses.reblog_of_id IS NULL') }
   scope :with_public_visibility, -> { where(visibility: :public) }
@@ -125,16 +134,20 @@ class Status < ApplicationRecord
   REAL_TIME_WINDOW = 6.hours
 
   def searchable_by(preloaded = nil)
-    ids = [account_id]
+    ids = []
+
+    ids << account_id if local?
 
     if preloaded.nil?
-      ids += mentions.pluck(:account_id)
-      ids += favourites.pluck(:account_id)
-      ids += reblogs.pluck(:account_id)
+      ids += mentions.where(account: Account.local, silent: false).pluck(:account_id)
+      ids += favourites.where(account: Account.local).pluck(:account_id)
+      ids += reblogs.where(account: Account.local).pluck(:account_id)
+      ids += bookmarks.where(account: Account.local).pluck(:account_id)
     else
       ids += preloaded.mentions[id] || []
       ids += preloaded.favourites[id] || []
       ids += preloaded.reblogs[id] || []
+      ids += preloaded.bookmarks[id] || []
     end
 
     ids.uniq
@@ -184,14 +197,6 @@ class Status < ApplicationRecord
     preview_cards.first
   end
 
-  def title
-    if destroyed?
-      "#{account.acct} deleted status"
-    else
-      reblog? ? "#{account.acct} shared a status by #{reblog.account.acct}" : "New status by #{account.acct}"
-    end
-  end
-
   def hidden?
     !distributable?
   end
@@ -208,6 +213,10 @@ class Status < ApplicationRecord
 
   def non_sensitive_with_media?
     !sensitive? && with_media?
+  end
+
+  def reported?
+    @reported ||= Report.where(target_account: account).unresolved.where('? = ANY(status_ids)', id).exists?
   end
 
   def emojis
@@ -272,14 +281,10 @@ class Status < ApplicationRecord
       where(language: nil).or where(language: account.chosen_languages)
     end
 
-    def as_home_timeline(account)
-      where(account: [account] + account.following).where(visibility: [:public, :unlisted, :private])
-    end
-
     def as_public_timeline(account = nil, local_only = false)
       query = timeline_scope(local_only).without_replies
 
-      apply_timeline_filters(query, account, local_only)
+      apply_timeline_filters(query, account, [:local, true].include?(local_only))
     end
 
     def as_tag_timeline(tag, account = nil, local_only = false)
@@ -296,8 +301,12 @@ class Status < ApplicationRecord
       Favourite.select('status_id').where(status_id: status_ids).where(account_id: account_id).each_with_object({}) { |f, h| h[f.status_id] = true }
     end
 
+    def bookmarks_map(status_ids, account_id)
+      Bookmark.select('status_id').where(status_id: status_ids).where(account_id: account_id).map { |f| [f.status_id, true] }.to_h
+    end
+
     def reblogs_map(status_ids, account_id)
-      select('reblog_of_id').where(reblog_of_id: status_ids).where(account_id: account_id).reorder(nil).each_with_object({}) { |s, h| h[s.reblog_of_id] = true }
+      unscoped.select('reblog_of_id').where(reblog_of_id: status_ids).where(account_id: account_id).each_with_object({}) { |s, h| h[s.reblog_of_id] = true }
     end
 
     def mutes_map(conversation_ids, account_id)
@@ -333,7 +342,7 @@ class Status < ApplicationRecord
 
       if account.nil?
         where(visibility: visibility)
-      elsif target_account.blocking?(account) # get rid of blocked peeps
+      elsif target_account.blocking?(account) || (account.domain.present? && target_account.domain_blocking?(account.domain)) # get rid of blocked peeps
         none
       elsif account.id == target_account.id # author can see own stuff
         all
@@ -350,10 +359,33 @@ class Status < ApplicationRecord
       end
     end
 
+    def from_text(text)
+      return [] if text.blank?
+
+      text.scan(FetchLinkCardService::URL_PATTERN).map(&:first).uniq.map do |url|
+        status = begin
+          if TagManager.instance.local_url?(url)
+            ActivityPub::TagManager.instance.uri_to_resource(url, Status)
+          else
+            EntityCache.instance.status(url)
+          end
+        end
+        status&.distributable? ? status : nil
+      end.compact
+    end
+
     private
 
-    def timeline_scope(local_only = false)
-      starting_scope = local_only ? Status.local : Status
+    def timeline_scope(scope = false)
+      starting_scope = case scope
+                       when :local, true
+                         Status.local
+                       when :remote
+                         Status.remote
+                       else
+                         Status
+                       end
+
       starting_scope
         .with_public_visibility
         .without_reblogs

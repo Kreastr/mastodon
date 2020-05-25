@@ -13,6 +13,7 @@ module AccountAssociations
     # Timelines
     has_many :statuses, inverse_of: :account, dependent: :destroy
     has_many :favourites, inverse_of: :account, dependent: :destroy
+    has_many :bookmarks, inverse_of: :account, dependent: :destroy
     has_many :mentions, inverse_of: :account, dependent: :destroy
     has_many :notifications, inverse_of: :account, dependent: :destroy
     has_many :conversations, class_name: 'AccountConversation', dependent: :destroy, inverse_of: :account
@@ -52,6 +53,8 @@ module AccountAssociations
 
     # Account migrations
     belongs_to :moved_to_account, class_name: 'Account', optional: true
+    has_many :migrations, class_name: 'AccountMigration', dependent: :destroy, inverse_of: :account
+    has_many :aliases, class_name: 'AccountAlias', dependent: :destroy, inverse_of: :account
 
     # Hashtags
     has_and_belongs_to_many :tags

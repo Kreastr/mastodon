@@ -20,6 +20,10 @@ class Api::BaseController < ApplicationController
     render json: { error: e.to_s }, status: 422
   end
 
+  rescue_from ActiveRecord::RecordNotUnique do
+    render json: { error: 'Duplicate record' }, status: 422
+  end
+
   rescue_from ActiveRecord::RecordNotFound do
     render json: { error: 'Record not found' }, status: 404
   end
@@ -34,6 +38,18 @@ class Api::BaseController < ApplicationController
 
   rescue_from Mastodon::NotPermittedError do
     render json: { error: 'This action is not allowed' }, status: 403
+  end
+
+  rescue_from Mastodon::RaceConditionError do
+    render json: { error: 'There was a temporary problem serving your request, please try again' }, status: 503
+  end
+
+  rescue_from Mastodon::RateLimitExceededError do
+    render json: { error: I18n.t('errors.429') }, status: 429
+  end
+
+  rescue_from ActionController::ParameterMissing do |e|
+    render json: { error: e.to_s }, status: 400
   end
 
   def doorkeeper_unauthorized_render_options(error: nil)
@@ -73,7 +89,7 @@ class Api::BaseController < ApplicationController
   end
 
   def require_authenticated_user!
-    render json: { error: 'This API requires an authenticated user' }, status: 401 unless current_user
+    render json: { error: 'This method requires an authenticated user' }, status: 401 unless current_user
   end
 
   def require_user!

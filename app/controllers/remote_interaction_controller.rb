@@ -10,6 +10,8 @@ class RemoteInteractionController < ApplicationController
   before_action :set_status
   before_action :set_body_classes
 
+  skip_before_action :require_functional!
+
   def new
     @remote_follow = RemoteFollow.new(session_params)
   end
@@ -32,14 +34,14 @@ class RemoteInteractionController < ApplicationController
   end
 
   def session_params
-    { acct: session[:remote_follow] }
+    { acct: session[:remote_follow] || current_account&.username }
   end
 
   def set_status
     @status = Status.find(params[:id])
     authorize @status, :show?
   rescue Mastodon::NotPermittedError
-    raise ActiveRecord::RecordNotFound
+    not_found
   end
 
   def set_body_classes
